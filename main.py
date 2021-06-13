@@ -4,7 +4,6 @@ import time
 import threading
 from queue import Queue
 
-
 format = "%(asctime)s: %(message)s"
 logging.basicConfig(format=format, level=logging.INFO,
                     datefmt="%H:%M:%S")
@@ -18,21 +17,40 @@ global living_sector, material_sector, food_sector, carts_controller
 
 
 class AbstractSector(object):
-    _list_of_people = list()
+    # _list_of_people = list()
 
+    # przerabiamy na słownik, żeby było łatwiej tym zarządzać
     def __init__(self, inhabitants=0, materials=0, food=0):
+
+        self.resources_lock = threading.Lock()
+        self.resources = {
+            'people': list(),
+            'food': 0,
+            'materials': 0
+        }
+
+
         logging.info("Creating an object of %s.", type(self).__name__)
+
         if inhabitants != 0 and type(self) is not LivingSector:
             logging.error("Sector other than LivingSector cannot have inhabitants initially.")
         # self._inhabitants = inhabitants
 
-        for i in range(inhabitants):
-            self._list_of_people.append(Person(i))
+        # for i in range(inhabitants):
+        #     self._list_of_people.append(Person(i))
 
-        self._materials = materials
-        self._food = food
+        for i in range(inhabitants):
+            self.resources['people'].append(Person(i))
+
+        # self._materials = materials
+        # self._food =
+
+        self.resources['food'] = food
+        self.resources['materials'] = materials
+
         if type(self) is AbstractSector:
             raise NotImplementedError("Can't create an object of an abstract class.")
+
         self.startup()
 
     def startup(self):
@@ -44,38 +62,53 @@ class AbstractSector(object):
 
     def get_resources(self):
         print(
-            f'---------------------------------------\n'
-            f'Sector \t\t:\t {type(self).__name__}\n'
-            f'Inhabitants :\t {self._list_of_people}\n'
-            f'Materials \t:\t {self._materials}\n'
-            f'Food \t\t:\t {self._food}'
+            f"---------------------------------------\n"
+            f"Sector \t\t:\t {type(self).__name__}\n"
+            f"Inhabitants :\t {self.resources['people']}\n"
+            f"Materials \t:\t {self.resources['materials']}\n"
+            f"Food \t\t:\t {self.resources['food']}"
         )
-        return self._inhabitants, self._materials, self._food
+        return self.resources['people'], self.resources['materials'], self.resources['food']
 
     # def update_inhabitants(self, quantity=0):
     #     logging.info("Updating a quantity of inhabitants in %s by %i.", type(self).__name__, quantity)
     #     self._inhabitants += quantity
 
-    def update_materials(self, quantity=0):
-        logging.info("Updating a quantity of materials in %s by %i.", type(self).__name__, quantity)
-        self._materials += quantity
+    # def update_materials(self, quantity=0):
+    #     logging.info("Updating a quantity of materials in %s by %i.", type(self).__name__, quantity)
+    #     self.materials += quantity
+    #
+    # def update_food(self, quantity=0):
+    #     logging.info("Updating a quantity of food in %s by %i.", type(self).__name__, quantity)
+    #     self.food += quantity
 
-    def update_food(self, quantity=0):
-        logging.info("Updating a quantity of food in %s by %i.", type(self).__name__, quantity)
-        self._food += quantity
+    def update_resources(self, res_type, quantity=0):
+        with self.resources_lock:
+            logging.info(f"Updating a quantity of {res_type} in {type(self).__name__} by {quantity}.")
+            if -quantity > self.resources[res_type]:
+                quantity = - self.resources[res_type]
+            self.resources[res_type] += quantity
+
+            return quantity
 
     def get_type(self):
         return type(self).__name__
 
     def take_people(self, new_people: list):
-        logging.info(f'Adding {new_people} to {type(self).__name__}')
-        self._list_of_people += new_people
+        with self.resources_lock:
+            logging.info(f'Adding {new_people} to {type(self).__name__}')
+            self.resources['people'] += new_people
 
     def send_people(self):
-        logging.info(f'Sending all people from {type(self).__name__}')
-        temp = self._list_of_people
-        self._list_of_people = list()
-        return temp
+        with self.resources_lock:
+            logging.info(f'Sending all people from {type(self).__name__}')
+            temp = self.resources['people']
+            self.resources['people'] = list()
+            return temp
+
+    def send_request(self, supply_type):
+        logging.info(f"{type(self).__name__} poprosił o {supply_type}")
+        SupplyRequest(supply_type, self)
 
     def process(self):
         pass
@@ -83,62 +116,102 @@ class AbstractSector(object):
 
 class LivingSector(AbstractSector):
     # todo zarządzanie ludźmi - proces
-    def startup(self):
-        for n in range(self._inhabitants):
-            self._list_of_people.append(Person(n))
 
     def process(self):
         while True:
-            daytime.wait()
-            logging.info("living_sector\t\t : \tSend the people off.")
             people_sent.release()
             people_sent.release()
 
             while daytime.isSet():
                 pass
+
             people_sent.acquire()
             people_sent.acquire()
-            logging.info("living_sector\t\t : \tFeed people.")
+
+            self.age_people()
+            self.feed_people()
+            daytime.wait()
+
+    def age_people(self):
+        people_temp = self.resources['people']
+        for person in people_temp:
+            person.age_up()
+            if not person.is_alive():
+                self.resources['people'].remove(person)
+                logging.info(f'Person {person} died')
+
+    def feed_people(self):
+        # karmienie posortowanych ludzi przez ich wartość
+        self.resources['people'].sort(key=lambda p: p.get_value(), reverse=True)
+        people_temp = self.resources['people']
+        for person in people_temp:
+            if self.update_resources('food', -10) == 0:
+                person.age_up()
+                person.age_up()
+                person.age_up()
+                if not person.is_alive():
+                    self.resources['people'].remove(person)
+                    logging.info(f'Person {person} died')
+
+    def __repr__(self):
+        return 'LivingSector'
 
 
 class MaterialSector(AbstractSector):
     # todo wytwarzanie materiałów - proces
     def process(self):
         while True:
-            daytime.wait()
+            # daytime.wait()
 
-            people_sent.acquire()
-            logging.info("material_sector\t : \tGet people.")
+            # people_sent.acquire()
+            # logging.info("material_sector\t : \tGet people.")
+            # while daytime.isSet():
+            #     logging.info("material_sector\t : \tProducing materials.")
+            #     time.sleep(2)
+            # logging.info("material_sector\t : \tSend off people.")
+            # time.sleep(0.1)
+            # people_sent.release()
             while daytime.isSet():
-                logging.info("material_sector\t : \tProducing materials.")
-                time.sleep(2)
-            logging.info("material_sector\t : \tSend off people.")
-            time.sleep(0.1)
-            people_sent.release()
+                # TODO PRACA
+                produced_materials = len(self.resources['people']) * 50
+                self.update_resources('materials', produced_materials)
+                time.sleep(1)
+
+    def __repr__(self):
+        return 'MaterialSector'
 
 
 class FoodSector(AbstractSector):
     # todo wytwarzanie jedzenia - proces
     def process(self):
         while True:
-            daytime.wait()
+            # daytime.wait()
+            #
+            # people_sent.acquire()
+            # logging.info("food_sector\t\t : \tGet people.")
+            # while daytime.isSet():
+            #     logging.info("food_sector\t\t : \tProducing food.")
+            #     time.sleep(2)
+            # logging.info("food_sector\t\t : \tSend off people.")
+            # time.sleep(0.1)
+            # people_sent.release()
 
-            people_sent.acquire()
-            logging.info("food_sector\t\t : \tGet people.")
             while daytime.isSet():
-                logging.info("food_sector\t\t : \tProducing food.")
-                time.sleep(2)
-            logging.info("food_sector\t\t : \tSend off people.")
-            time.sleep(0.1)
-            people_sent.release()
+                # TODO PRACA
+                produced_food = len(self.resources['people']) * self.update_resources('materials', 50)
+                self.update_resources('food', produced_food)
+                time.sleep(1)
+
+    def __repr__(self):
+        return 'FoodSector'
 
 
 class Person(object):
     # todo starzenie się, jedzenie + to ile ma siły w zależności ile zjadł
-    _age = 0
-    _is_alive = True
 
     def __init__(self, name=0):
+        self._age = 0
+        self._is_alive = True
         logging.info("Creating an object of %s.", type(self).__name__)
         self._days = random.randrange(100, 150)
         self._work_speed = random.randrange(70, 130) / 100
@@ -176,22 +249,42 @@ class Person(object):
     def die(self):
         self._is_alive = False
 
+    def get_value(self):
+        value = 0
+        value += (self._days - self._age)
+        value *= self._work_speed
+        return value
+
+    def __repr__(self):
+        return f'(Person {self._name}, Age: {self._age}/{self._days}, Work speed: {self._work_speed})'
+
 
 class Cart:
+    resources_amount = {
+        'food': 100,
+        'materials': 200
+    }
 
-    def __init__(self, current_location):
+    def __init__(self, current_location: AbstractSector):
         self.current_location = current_location
 
-    def cart(self, do: AbstractSector, co: int):
-        logging.info(f"Wyruszono z {type(self.current_location).__name__} z {co}")
-        self.current_location.ile_update(-co)
-        time.sleep(2)
-        do.ile_update(co)
-        self.current_location = do
-        logging.info(f"Dotarto do {type(do).__name__} z {co}")
+    def cart(self, do: AbstractSector, res_type):
+        if res_type != 0:
+            q = -self.current_location.update_resources(res_type, -self.resources_amount[res_type])
+            logging.info(f"Wyruszono z {type(self.current_location).__name__} z {res_type}: {q}")
+            time.sleep(2)
+            do.update_resources(res_type, q)
+            self.current_location = do
+            logging.info(f"Dotarto do {type(do).__name__} z {res_type}: {q}")
+        else:
+            logging.info(f"Wyruszono z {type(self.current_location).__name__} z niczym")
+            time.sleep(2)
+            self.current_location = do
+            logging.info(f"Dotarto do {type(do).__name__} z niczym")
 
 
 class SupplyRequest:
+
     def __init__(self, supply_type, sender):
         self.supply_type = supply_type
         self.sender = sender
@@ -199,7 +292,7 @@ class SupplyRequest:
         self.send_request()
 
     def send_request(self):
-        logging.info(f"{type(self).__name__} przekazał request od {self.sender}")
+        logging.info(f"{type(self).__name__} przekazał request od {self.sender} o {self.supply_type}")
         carts_controller.receive_request(self)
 
 
@@ -207,12 +300,16 @@ class CartsController:
     carts_lock = threading.Lock()
 
     free_carts = {
-        'sector1': Queue(),
-        'sector2': Queue(),
-        'sector3': Queue()
+        'LivingSector': Queue(),
+        'MaterialSector': Queue(),
+        'FoodSector': Queue()
     }
 
     request_queue = Queue()
+
+    def start(self):
+        thread = threading.Thread(target=self.main_loop)
+        thread.start()
 
     def main_loop(self):
         while True:
@@ -221,10 +318,10 @@ class CartsController:
                 max_sect = None
                 for sect in sectors:
                     if sect != req.sender:
-                        if sect.ile >= req.supply_type:
+                        if sect.resources[req.supply_type] > 0:
                             if max_sect is None:
                                 max_sect = sect
-                            elif sect.ile > max_sect.ile:
+                            elif sect.resources[req.supply_type] > max_sect.resources[req.supply_type]:
                                 max_sect = sect
                 logging.info(f"{type(self).__name__} próbuje wysłać cart z {type(max_sect).__name__} do"
                              f" {type(req.sender).__name__}")
@@ -232,21 +329,23 @@ class CartsController:
 
     def send_cart(self, req: SupplyRequest, from_where):
         from_where_ = repr(from_where)
+        material_sector_ = repr(material_sector)
+        living_sector_ = repr(living_sector)
+        food_sector_ = repr(food_sector)
 
         if self.free_carts[from_where_].qsize() > 0:
             self._send_cart(from_where, req.sender, req.supply_type)
 
-        elif self.free_carts[repr(living_sector)].qsize() > self.free_carts[repr(material_sector)].qsize():
-            if self.free_carts[repr(living_sector)].qsize() > self.free_carts[repr(food_sector)].qsize():
-                if self.free_carts[repr(living_sector)].qsize() > 0:
+        elif self.free_carts[living_sector_].qsize() > self.free_carts[material_sector_].qsize():
+            if self.free_carts[living_sector_].qsize() > self.free_carts[food_sector_].qsize():
+                if self.free_carts[living_sector_].qsize() > 0:
                     self._send_cart(living_sector, from_where, 0)
                     self._send_cart(from_where, req.sender, req.supply_type)
 
-            elif self.free_carts[repr(food_sector)].qsize() > 0:
+            elif self.free_carts[food_sector_].qsize() > 0:
                 self._send_cart(food_sector, from_where, 0)
                 self._send_cart(from_where, req.sender, req.supply_type)
-
-        elif self.free_carts[repr(material_sector)].qsize() > 0:
+        elif self.free_carts[material_sector_].qsize() > 0:
             self._send_cart(material_sector, from_where, 0)
             self._send_cart(from_where, req.sender, req.supply_type)
 
@@ -266,6 +365,10 @@ class CartsController:
         self.request_queue.put(req)
 
 
+class SectorsController:
+    pass
+
+
 def day_cycle():
     while True:
         logging.info("day_cycle\t\t\t : \tDay is raising!")
@@ -278,15 +381,19 @@ def day_cycle():
 
 def start_sectors():
     logging.info("start_sectors\t\t : \tStarting processes.")
-
-    global living_sector, material_sector, food_sector
+    global living_sector
     living_sector = LivingSector(inhabitants=100)
+    global material_sector
     material_sector = MaterialSector(materials=199)
+    global food_sector
     food_sector = FoodSector(food=1299)
 
-    living_sector.start()
-    material_sector.start()
-    food_sector.start()
+    # living_sector.start()
+    # material_sector.start()
+    # food_sector.start()
+    # living_sector.get_resources()
+    # material_sector.get_resources()
+    # food_sector.get_resources()
 
     global sectors
     sectors = [
@@ -300,3 +407,11 @@ def start_sectors():
 
     global carts_controller
     carts_controller = CartsController()
+    carts_controller.start()
+
+    carts_controller.free_carts['LivingSector'].put(Cart(living_sector))
+
+    food_sector.send_request('materials')
+
+
+# start_sectors()
