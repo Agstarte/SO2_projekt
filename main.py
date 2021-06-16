@@ -467,5 +467,5 @@ class SectorsController:
             daytime.clear()
             time.sleep(8)
 
-
-start = SectorsController(carts)
+if __name__ == '__main__':
+    start = SectorsController(carts)
